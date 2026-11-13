@@ -49,16 +49,23 @@ def on_batch(state, batch):
         return []
     if len(closes) < SLOW + 1:
         return []
-    slow_ma = sum(closes[-SLOW:]) / SLOW
+    # Exact integer comparison (no float division): the slow average is
+    # sum(closes[-SLOW:]) / SLOW, so
+    #   buy  when last < slow_ma * (1 - BAND_BPS/10000)
+    #        <=> last * 10000 * SLOW < slow_sum * (10000 - BAND_BPS)
+    #   sell when last >= slow_ma
+    #        <=> last * SLOW >= slow_sum
+    # Integer math keeps the decision identical on every platform.
+    slow_sum = sum(closes[-SLOW:])
     last = closes[-1]
     holding = state.positions.get(SYMBOL)
-    if holding is None and last * 10000 < slow_ma * (10000 - BAND_BPS):
+    if holding is None and last * 10000 * SLOW < slow_sum * (10000 - BAND_BPS):
         if state.cash >= MIN_NOTIONAL:
             return [{"side": "buy", "symbol": SYMBOL,
                      "notional_quote_units": state.cash,
                      "max_slippage_bps": MAX_SLIPPAGE_BPS}]
         return []
-    if holding is not None and last >= slow_ma:
+    if holding is not None and last * SLOW >= slow_sum:
         return [{"side": "sell", "symbol": SYMBOL, "qty": holding.qty,
                  "max_slippage_bps": MAX_SLIPPAGE_BPS}]
     return []
