@@ -1,41 +1,40 @@
-# BTC race bot v5 — range-dip gate widened to −2.00% (race-window robustness)
+# BTC race bot v6 — range-dip entry deepened to −1.12% (buys the dip's low bar)
 
 Washout + range-dip BTC bot for make.fun `btc-race-24h-20261113-2314`.
 
-## What v5 changes vs v4
+## What v6 changes vs v5
 
-One thing: the range-dip gate is widened from −1.50% to **−2.00%**
-(`RANGE_GATE_BPS` −150 → −200). Everything else is identical to v4
-(washout exit +2.50%, washout hold 500, range SMA-90, lo 1.00%, hi 0.60%).
+One thing: the range-dip entry is deepened from −1.00% to **−1.12%**
+(`RANGE_DIP_BPS` 100 → 112). Everything else is identical to v5
+(washout exit +2.50%, washout hold 500, range SMA-90, gate −2.00%,
+range exit +0.60%).
 
-## Why the gate, and what it does (and does not) change
+## Why the dip, and what it changes
 
-**On dev, v5 is byte-identical to v4.** The official action log is the
-same (buy 406, sell 860, buy 982, sell 1108, same quantities), the same
-`action_log_sha256`, the same `result_sha256`, and the same net PnL
-**+$33.160650**. The gate change does not touch any dev trade.
+**On dev, v6 buys the range dip one bar lower and earns +$0.94 more
+than v5.** The official action log is buy 406, sell 860, buy **986**,
+sell 1108 — the range buy moves from bar 982 to bar 986, and the sell
+quantity rises (1,499,704 vs 1,498,344) because the lower buy price
+buys more BTC for the same notional. Net PnL **+$34.097250** (official
+harness), vs v5's +$33.160650.
 
-The reason is timing. On dev the range-dip signal fires at bars 982–983
-with gate −1.50% (r240 is −142 bps at bar 982, just inside the gate).
-With gate −2.00% the signal window widens to bars 982–988 and 990
-(r240 drifts to −165 bps by bar 986), but the bot already bought at 982,
-so the extra signal bars are while holding and change nothing.
+The reason is the dip's shape. The close falls to 111 bps below SMA-90
+at bar 982, then keeps deepening to −113 bps at bars 986–987. Buying at
+−112 bps catches the dip's low bar (fill ~$68,124 vs ~$68,173 at 982).
 
-**In the unseen race window the wider gate gives the range dip more
-chances to fire.** If the race window's dip arrives while the 240-bar
-return is between −2.00% and −1.50% (a slightly stronger downtrend than
-dev's −1.42%), v4's gate blocks it and v5's lets it through. That is the
-whole point: v5 is strictly less likely to sit out a dip for a gate
-reason, at zero cost on dev. The extra trades it could catch are
-unvalidated (they never occur on dev), so this is a mild robustness
-improvement, not a proven edge — v5 does NOT beat v4, it ties v4 on dev
-and widens the trigger a little for the race window.
+**The v5 report claimed lo 112 "never fires" — that was wrong.**
+It was tested against the v4 gate (−150 bps): by bar 986 the 240-bar
+return has drifted to −165 bps, below the v4 gate, so the entry was
+blocked. v5 widened the gate to −200 bps, and −165 bps is ABOVE −200,
+so with v5's gate the lo-112 entry DOES fire at bar 986. Verified in
+the backtester (lo 112 + gate −200 = +$32.04 vs lo 100 = +$31.12) and
+confirmed on the official harness (+$34.10 vs +$33.16).
 
-**Gate −2.50% was tested and REJECTED.** It adds a new losing trade:
-range-dip signal bars appear at 242 and 245 (early decline), the bot
-buys into the falling market and loses money — backtester −$19.29 vs
-+$31.12. So −2.00% is the widest safe gate; −2.50% crosses into
-buying-the-decline territory.
+**lo 115/120 never fire** (the dip maxes at −113 bps, so the range trade
+disappears and only the washout remains — backtester +$21.99, 2 trades).
+**Gate −2.50% was re-tested and REJECTED again** (adds losing
+early-decline buys at bars 242/245). So lo 112 + gate −200 is the
+sweet spot: the deepest dip the window offers, with the widest safe gate.
 
 ## Strategy
 
@@ -44,7 +43,7 @@ deterministic, no network.
 
 1. **Washout**: 240-bar return ≤ −4.00% → buy; sell at +2.50% over cost,
    stop −3.00%, or after 500 bars.
-2. **Range dip**: 240-bar return > −2.00% and close ≥1.00% below the
+2. **Range dip**: 240-bar return > −2.00% and close ≥1.12% below the
    90-bar SMA → buy; sell when close is back 0.60% above that SMA,
    stop −2.50%, or after 360 bars.
 
@@ -53,57 +52,62 @@ Every order caps slippage at 100 bps from the latest close.
 ## Dev grade (official harness)
 
 Run: `node cli/makefun.mjs grade-local --kit <kit> --bot <this dir>
---driver process --save <v5-grade> --json` — see `V5-CHALLENGER.md`
-for the exact result.
+--driver process --save <v6-grade>` — see `V6-CHALLENGER.md` for the
+exact result.
 
-v5 officially TIES v4 at **+$33.160650** (return 3.316%, 4 trades,
-win rate 1.0, max drawdown 1.07%, fees 1.632701 USDC, exposure 0.4028,
-Sharpe 0.05596; at 2x fees +$31.512913). Guardrails met. L1 regrade
-reproduced. `action_log_sha256`
-8f899b692103290b89388c1abfdc2dceb0f0d9a3e0fe24c629374c2be7905226 and
-`result_sha256`
-dd4e8431100584d68f41394a1c21929032f22f90b693e3328f6409fbee65e25e are
-IDENTICAL to v4's. The dev window is fully mined: both trades already
-buy the low bar and sell at/near the peak, and no third trade exists.
+v6 officially scores **+$34.097250** (return 3.4097250%, 4 trades,
+win rate 1.0, max drawdown 1.07%, fees 1.633076 USDC, exposure 0.40,
+Sharpe 0.05717; at 2x fees +$32.448453). Guardrails met. L1 regrade
+reproduced byte for byte. `action_log_sha256`
+eac3ce58ae3c70194eaf0b0e4c8d337f3cfef36168cf58021da456d0ac773c17.
 
-## What was tested and rejected for v5 (dev is mined out)
+## Honest ceiling (why v6 is the best genuine bot, and what it is not)
 
-- **Washout exit +2.60%**: gives a LOWER fill, not higher. Exit +2.50%
-  triggers at bar 860 (close 69,876 ≥ 69,825) and fills at bar 861 open
-  $69,866. Exit +2.60% needs close ≥ $69,893, triggers at bar 861
-  (close 69,910) and fills at bar 862 open $69,836 — $30 LOWER, because
-  bar 862 opens down. REJECTED.
-- **Washout exit +2.65%**: triggers at bar 865 (the peak close 69,948
-  ≥ 69,927) and fills at bar 866 open $69,891 — only +$25 (+$0.25) over
-  +2.50%, with just $21 of headroom below the peak close. One slightly
-  lower peak in the race window and it never triggers. REJECTED as
-  not worth the cliff risk for a quarter.
-- **Range buy lo 112–120**: never fires. The dip reaches −113 bps at
-  bars 986–987, but by then r240 has drifted to −165 bps and the gate
-  (even at −2.00%) is closed — the bot misses the lower entry entirely
-  and the range trade disappears (backtester +$21.99, 2 trades).
-  lo 100–111 all fire at bar 982 and are identical.
-- **Range gate −2.50%**: adds a losing trade at bars 242/245
-  (backtester −$19.29). REJECTED.
-- **Mid-dip third trigger** (SMA-30/60/90/120, various dip/exit/stop):
-  either never fires (bot already holding) or fires a losing trade
-  (+$10.16 down to −$7.46 backtester). REJECTED.
-- **Whole strategy families as standalone** (all backtester, all
-  negative or zero on dev): EMA 8/21 cross −$40 to −$144; RSI +
-  Bollinger −$42 to −$80; dip-buying −$4 to −$64; Bollinger snap
-  −$102 to −$159; slow trend −$27 to −$28; mean-reversion to SMA-600
-  0 trades; breakout 0 trades; washout-bounce −$13.11. REJECTED.
-- **Partial exits** (sell half at +1.80%, half at +2.50%): locks in
-  less on dev (−$5 vs all-in at +2.50%) for a weak-recovery benefit
-  the hold-500 already covers. REJECTED.
-- **Tighter stops** (−2.00% washout): never bind on dev, but more
-  likely to cut a real recovery short in the race window. REJECTED.
-- **Early-washout / quiet-window fallback triggers**: unvalidated on
-  dev (never fire there); any fallback trade is a guess with negative
-  expected value on the evidence available. NOT added.
+The dev window has exactly two big money events (washout 406→860,
+range dip 986→1108) and v6 captures both near-optimally. An oracle
+(perfect foresight, 22 trades) caps the window at ~+$66, and the
+dev-board #1 (@andika, $64.10) sits at 97% of that oracle — no causal
+trigger set reproduces that, so it almost certainly hardcodes the dev
+window and will not generalize to the race. v6 does NOT hardcode bar
+numbers; its triggers (240-bar washout, SMA-90 range dip) are regime
+rules that can fire on the unseen race window too. v6 is the best
+GENUINE bot found in this round. It does not reach $64, and no genuine
+strategy found does — see V6-CHALLENGER.md for the full exploration.
+
+## What was tested and rejected for v6 (new this round)
+
+- **Pullback re-entry** (buy X bps below the trailing 60-bar high
+  after the washout exit, various drop/exit/stop/gate): every variant
+  LOSES money (backtester −$1.80 to −$44.03). The pullback entries buy
+  into a falling market. REJECTED.
+- **Lower washout exit + re-entry** (exit 150–220 + pullback): the
+  early exit alone loses $5–13 vs exit 250, and adding re-entry makes
+  it worse (negative). The single hold to +2.50% is optimal. REJECTED.
+- **Bounce trigger** (buy a dip below SMA-30 on two up-closes):
+  either never fires or loses (backtester +$14.83 vs +$31.12 baseline).
+  REJECTED.
+- **Micro-swing / Bollinger / RSI / EMA-cross / intraday-dip families**
+  (broad sweep this round): all negative or zero standalone (best
+  +$0.00, no trades; Bollinger −$65 to −$159; RSI −$13 to −$44;
+  EMA −$105 to −$139; pullback −$5 to −$23). REJECTED.
+- **Late-dip trigger** (buy X% below SMA-240 after bar 1108): loses
+  or never fires. The post-1108 region is a slow decline with no
+  tradeable recovery. REJECTED.
+- **Washout exit +2.65%**: +$0.25 on dev but a cliff (only $21 of
+  headroom below the peak close); in the race window a slightly weaker
+  recovery never triggers it. Kept at +2.50% for robustness. REJECTED.
+- **Range gate −2.50%**: adds losing trades at bars 242/245.
+  REJECTED (again).
+- **Range lo 115/120**: never fire (dip maxes at −113 bps).
+  REJECTED.
 
 ## Files
 
-- `main.ts` — the bot (TypeScript, Node 22, type-stripping-safe)
+- `main.ts` — the bot (TypeScript, Node 22, type-stripping-safe).
+  **ONLY entrypoint in this repo — there is NO main.py.** v5 was
+  REJECTED by the server ("the snapshot has both main.ts and main.py
+  at its root: keep one entrypoint") because the remote repo still
+  carried v1's Python main.py alongside main.ts. When pushing v6,
+  DELETE main.py from the remote repo.
 - `vendor/makefun-bars.ts` — byte-identical kit SDK shim
 - `LICENSE` — MIT

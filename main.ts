@@ -1,56 +1,34 @@
-// Washout + range-dip BTC bot v4 for make.fun btc-race-24h-20261113-2314.
+// Washout + range-dip BTC bot v6 for make.fun btc-race-24h-20261113-2314.
 //
-// v4 = v3 with ONE change: the washout max hold is shortened 720 -> 500
-// bars (WASH_MAX_HOLD 720 -> 500). The washout exit stays at +2.50%.
+// v6 = v5 with ONE change: the range-dip entry is deepened 100 -> 112 bps
+// (RANGE_DIP_BPS 100 -> 112). Everything else is v5 unchanged.
 //
-// Why only the hold: v4 first tried raising the exit to +2.70% (the
-// backtester said +$33.16 vs v3's +$31.12), but the OFFICIAL harness
-// rejected it: the washout never sold at the exit and instead sold at the
-// max hold (bar 906), for +$22.85 -- WORSE than v3's +$33.16. Root cause:
-// the backtester checks the exit on the GROSS close ratio, but the official
-// harness checks it on the NET value/cost ratio, and the buy's effective
-// cost (fill ~$68,096 vs the decision-bar close $67,877) eats ~32 bps.
-// Officially the exit triggers only when the close reaches
-// $68,122 x (1 + exit): +2.50% needs $69,825 (bar 860, close 69,876 --
-// confirmed in v3's official action log), +2.60% needs $69,893 (bar 861),
-// +2.70% needs $69,961 -- but the dev peak close is $69,948, so +2.70%
-// NEVER triggers. The backtester's "broad 210-300 plateau" is an artifact
-// of ignoring the buy-side drag; officially the plateau is ~230-260 and
-// 270 is a cliff. +2.50% keeps 18 bps of headroom below the dev peak;
-// +2.60% keeps only 8 bps for a sub-dollar fill difference, so +2.50%
-// stays. LESSON: never trust the backtester for exit levels near the peak
-// -- verify every exit candidate on the official harness.
+// Why only the dip: v5's range trade buys at bar 982, when the close is
+// 111 bps below SMA-90. The dip keeps deepening to -113 bps at bars
+// 986-987, so buying at -112 bps buys ~$50 lower (fill ~$68,124 vs
+// ~$68,173) for ~+$0.90 on dev. The v5 report claimed lo 112 "never
+// fires", but that was tested against the v4 gate (-150 bps): by bar 986
+// the 240-bar return has drifted to -165 bps, below the v4 gate, so the
+// entry was blocked. v5 widened the gate to -200 bps, and -165 bps is
+// ABOVE -200, so with v5's gate the lo-112 entry DOES fire at bar 986.
+// Verified in the backtester: lo 112 + gate -200 = +$32.04 vs lo 100 =
+// +$31.12 (+$0.92). lo 115/120 never fire (dip maxes at -113 bps, so the
+// range trade disappears and only the washout remains). Gate -250 was
+// re-tested and REJECTED again (adds losing early-decline buys).
 //
-// Why the shorter hold: it is cliff insurance, not a dev lever. On dev the
-// exit triggers at bar 860 (454 bars after entry), so a 500-bar hold never
-// binds and dev PnL is unchanged (v4 officially ties v3 at +$33.16). But
-// if the exit NEVER triggers (weak recovery in the unseen race window),
-// the washout must not sit held past the range-dip trade at bar 982.
-// With hold 720 the washout sells at bar 1126 and the range trade is
-// blocked (cliff total +$8.66 backtester). With hold 500 it sells at bar
-// 906 @ 69,180, the range trade fires, and the cliff total is +$22.76 --
-// proven by v4's own first official run, where the failed +2.70% exit
-// still left +$22.85 because the 500-bar hold freed the bot for the range
-// trade. Hold 450 is too short (fires bar 856, 4 bars before the exit,
-// -$8 on dev); hold 550 sells lower in the cliff (bar 956 @ 68,640). 500
-// is the sweet spot: 46 bars of headroom past the dev exit, and the best
-// cliff PnL among holds that do not touch dev.
-//
-// Everything else (triggers, stops, range-dip, exit) is v3 unchanged. The
-// dev window has exactly two money events and v4 takes both. v4 does NOT
-// beat v3 on dev PnL (it ties at +$33.16) -- the dev window is fully mined
-// and both trades already buy the low bar and sell at/near the peak. v4's
-// gain is strictly in the failure case: it weakly dominates v3 on the
-// unseen race window (same when the exit triggers, much better when it
-// does not).
-//
-// What else was tested and rejected for v4: washout lookback 120/180 never
-// fires and 360 fires early and blocks the range trade (240 is uniquely
-// correct); range SMA-60 never fires and SMA-120/180 buy higher and add a
-// losing trade (90 is optimal); range % exits sell too early or never
-// (+$17.66-27.31); range lo 113 never fires (max dip is -113 bps);
-// bounce-confirmation entry buys higher and its apparent +$1.32 is a
-// fill-depth artifact at one bar, not a real edge.
+// Why the dev window cannot go much higher (honest ceiling): the window
+// has exactly two big money events (washout 406->860, range dip 982->1108)
+// and both are already captured near-optimally. Every attempt to add a
+// third trade loses money causally -- pullback re-entries, bounce
+// triggers, micro-swing, Bollinger, RSI, EMA-cross and intraday-dip
+// families all score negative or zero standalone, and adding them to v5
+// destroys PnL (tested this round). An oracle (perfect foresight, 22
+// trades) caps the window at ~+$66; the dev-board #1 (@andika, $64.10)
+// sits at 97% of that oracle, which no causal trigger set reproduces --
+// it almost certainly hardcodes the dev window. v6 is the best GENUINE
+// (generalizable) bot found: it does not hardcode bar numbers, and its
+// triggers (240-bar washout, SMA-90 range dip) are regime rules that can
+// fire on the unseen race window too.
 //
 // Strategy (long only, one position, whole equity per trade, bigint integer
 // math only, no floats, no clock, no network, no randomness -- the same bars
@@ -62,8 +40,8 @@
 // 1. WASHOUT -- the 240-bar (4h) return falls to -4.00% or worse: BTC just had
 //    a capitulation leg. Buy the washout, sell when the position is worth
 //    +2.50% over its cost, stop at -3.00%, or after 500 bars.
-// 2. RANGE DIP -- outside a washout (240-bar return above -1.50%), the close
-//    sits 1.00% or more below its 90-bar simple moving average: BTC is at the
+// 2. RANGE DIP -- outside a washout (240-bar return above -2.00%), the close
+//    sits 1.12% or more below its 90-bar simple moving average: BTC is at the
 //    bottom of its short-term range. Buy the dip, sell when the close is back
 //    0.60% above that average, stop at -2.50%, or after 360 bars.
 //
@@ -74,6 +52,12 @@
 // The washout max hold (500 bars) is short enough that a missed exit still
 // sells before the range-dip window, so a stranded washout can never block
 // the second trade.
+//
+// ENTRYPOINT: this repository ships ONLY main.ts. There is NO main.py --
+// v5 was REJECTED by the server ("the snapshot has both main.ts and main.py
+// at its root: keep one entrypoint") because the remote repo still carried
+// v1's Python main.py alongside main.ts. When pushing v6, DELETE main.py
+// from the remote repo (it must not be in the submitted snapshot).
 
 import { BPS, runBars, type BarsState, type Batch, type OrderInput } from './vendor/makefun-bars.ts';
 
@@ -93,7 +77,7 @@ const WASH_MAX_HOLD = 500;
 // --- range-dip trigger: close below the 90-bar average ---------------------
 // Unchanged from v2.
 const RANGE_N = 90;
-const RANGE_DIP_BPS = 100n;
+const RANGE_DIP_BPS = 112n; // v6: deepened from 100 (v5) -- buys at bar 986 (-113 bps dip) instead of 982; fires only because v5's gate is -200 (r240 is -165 at bar 986, above the gate); lo 115/120 never fire (dip maxes at -113 bps)
 const RANGE_EXIT_BPS = 60n;
 const RANGE_STOP_BPS = 250n;
 const RANGE_MAX_HOLD = 360;
